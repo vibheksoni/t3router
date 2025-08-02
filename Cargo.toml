@@ -1,0 +1,21 @@
+[package]
+name = "t3router"
+version = "0.1.0"
+edition = "2024"
+authors = ["Vibhek Soni"]
+description = "A Rust client library for t3.chat - access 50+ AI models from your terminal"
+repository = "https://github.com/vibheksoni/t3router"
+license = "MIT"
+keywords = ["t3chat", "ai", "api", "client", "cli"]
+categories = ["api-bindings", "command-line-utilities"]
+
+[dependencies]
+base64 = "0.22"
+chrono = "0.4"
+dotenv = "0.15.0"
+regex = "1.10"
+reqwest = { version = "0.12.22", features = ["json"] }
+serde_json = "1.0.142"
+tokio = { version = "1.47.1", features = ["full"] }
+uuid = { version = "1.17.0", features = ["v4"] }
+urlencoding = "2.1"
