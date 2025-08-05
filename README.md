@@ -205,6 +205,10 @@ This library works by:
 - **Rate limits apply** - Don't send too many requests too fast
 - **Follow t3.chat's terms** - Use this responsibly
 
+## Disclaimer
+
+This project is not intended for abusing t3.chat or any related services; it is simply a technical demonstration and a cool tool for experimentation. We do not promote or support any misuse of this library. The author(s) take no responsibility for any actions taken against your account. In principle, this should not happen, as the library only functions with paid subscription accounts; however, t3.chat may introduce countermeasures in the future. Use at your own risk.
+
 ## Contributing
 
 If you find a bug or want to add something:
