@@ -44,7 +44,7 @@ dotenv = "0.15"
 
 1. Go to t3.chat in your browser
 2. Open Developer Tools (press F12)
-3. Go to Application → Cookies
+3. Go to Application > Cookies
 4. Copy your entire cookie string
 5. Find and copy your `convex-session-id` value
 
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = client.send(
         "claude-3.7",
         Some(Message::new(Type::User, "What is the weather like today?".to_string())),
-        &config
+        Some(config)
     ).await?;
     
     println!("{}", response.content);
@@ -101,7 +101,7 @@ client.append_message(Message::new(Type::Assistant, "Sure! I'd be happy to discu
 let response = client.send(
     "gpt-4o",
     Some(Message::new(Type::User, "What makes Rust memory safe?".to_string())),
-    &config
+    Some(config)
 ).await?;
 
 println!("Total messages: {}", client.get_messages().len());
@@ -116,18 +116,18 @@ let save_path = Path::new("output/image.png");
 let response = client.send_with_image_download(
     "gpt-image-1",
     Some(Message::new(Type::User, "A sunset over mountains".to_string())),
-    &config,
+    Some(config),
     Some(save_path)
 ).await?;
 
-match &response.content_type {
-    ContentType::Image { url, base64 } => {
+match response.content_type {
+    ContentType::Image => {
         println!("Image saved to {:?}", save_path);
-        if let Some(b64) = base64 {
+        if let Some(b64) = response.base64_data {
             println!("Base64 data: {} bytes", b64.len());
         }
     }
-    ContentType::Text(text) => println!("Got text: {}", text),
+    ContentType::Text => println!("Got text: {}", response.content),
 }
 ```
 
@@ -164,29 +164,29 @@ You can adjust settings like this:
 ```rust
 use t3router::t3::config::{Config, ReasoningEffort};
 
-let config = Config::builder()
-    .reasoning_effort(ReasoningEffort::High)
-    .include_search(true)
-    .build();
+let mut config = Config::new();
+config.reasoning_effort = ReasoningEffort::High;
+config.include_search = true;
 ```
+
 
 ## Project Structure
 
 ```
 t3router/
-├── src/
-│   ├── lib.rs              # Library entry point
-│   └── t3/
-│       ├── client.rs       # Main client code
-│       ├── message.rs      # Message types
-│       ├── models.rs       # Model discovery
-│       └── config.rs       # Configuration
-├── examples/
-│   ├── basic_usage.rs      # Simple example
-│   ├── multi_message.rs    # Conversation examples
-│   └── image_generation.rs # Image examples
-└── old/
-    └── T3CHAT_ARCHITECTURE.md # Technical details
+|-- src/
+|   |-- lib.rs              # Library entry point
+|   `-- t3/
+|       |-- client.rs       # Main client code
+|       |-- message.rs      # Message types
+|       |-- models.rs       # Model discovery
+|       `-- config.rs       # Configuration
+|-- examples/
+|   |-- basic_usage.rs      # Simple example
+|   |-- multi_message.rs    # Conversation examples
+|   `-- image_generation.rs # Image examples
+`-- old/
+    `-- T3CHAT_ARCHITECTURE.md # Technical details
 ```
 
 ## How It Works

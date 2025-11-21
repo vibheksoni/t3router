@@ -1,14 +1,13 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::string::ToString;
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use reqwest;
-use serde_json;
+use serde_json::{self, Value};
 use uuid::Uuid;
 
-use super::config::{Config, ReasoningEffort};
+use super::config::Config;
 use super::message::{ContentType, Message, Type};
 
 pub struct Client {
@@ -58,6 +57,49 @@ impl Client {
         }
     }
 
+    ///
+    /// Refreshes the session by calling the active sessions endpoint to update cookies.
+    ///
+    /// # Arguments
+    /// * `self`: `&mut Self` - The client instance.
+    ///
+    /// # Returns
+    /// * `Result<bool, reqwest::Error>` - True if refresh succeeded.
+    pub async fn refresh_session(&mut self) -> Result<bool, reqwest::Error> {
+        let url = "https://t3.chat/api/trpc/auth.getActiveSessions?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22includeLocation%22%3Afalse%7D%7D%7D";
+        let response = self
+            .client
+            .get(url)
+            .header("Cookie", &self.cookies)
+            .header("content-type", "application/json")
+            .header("trpc-accept", "application/jsonl")
+            .send()
+            .await?;
+        if let Some(new_session) = response.headers().get("x-workos-session") {
+            if let Ok(session_str) = new_session.to_str() {
+                if !session_str.is_empty() {
+                    let mut parts: Vec<String> = self
+                        .cookies
+                        .split(';')
+                        .filter_map(|part| {
+                            let trimmed = part.trim();
+                            if trimmed.starts_with("wos-session=") {
+                                None
+                            } else if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(trimmed.to_string())
+                            }
+                        })
+                        .collect();
+                    parts.push(format!("wos-session={}", session_str));
+                    self.cookies = parts.join("; ");
+                }
+            }
+        }
+        Ok(response.status().is_success())
+    }
+
     /**
     Initializes the client by sending a GET request to the main page.
 
@@ -78,56 +120,127 @@ impl Client {
         Ok(res.status().is_success())
     }
 
-    /**
-    Parses the response string and extracts content (text or image).
-
-    # Arguments
-    * `self` - &Self: The client instance.
-    * `response` - &str: The response string to parse.
-
-    # Returns
-    * `Result<(String, Option<String>), String>` - The parsed content and optional image URL or an error message.
-    */
-    pub async fn parse_response(&self, response: &str) -> Result<(String, Option<String>), String> {
+    ///
+    /// Parses the EventStream response and extracts content (text or image).
+    ///
+    /// # Arguments
+    /// * `self`: `&Self` - The client instance.
+    /// * `response`: `&str` - The raw response text to parse.
+    ///
+    /// # Returns
+    /// * `Result<(String, Option<String>, Option<String>), String>` - Parsed text, optional image URL, and optional inline base64 image data.
+    pub async fn parse_response(
+        &self,
+        response: &str,
+    ) -> Result<(String, Option<String>, Option<String>), String> {
         let mut text_result = String::new();
         let mut image_url = None;
-
-        for line in response.lines() {
-            if let Some(colon_pos) = line.find(':') {
-                let code = &line[..colon_pos];
-                let json_data = &line[colon_pos + 1..];
-
-                match code {
-                    "0" => {
-                        if let Ok(text) = serde_json::from_str::<String>(json_data) {
-                            text_result.push_str(&text);
-                        }
+        let mut inline_base64 = None;
+        let push_text = |value: &Value, target: &mut String| {
+            if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                target.push_str(delta);
+                return;
+            }
+            if let Some(delta_obj) = value.get("delta").and_then(Value::as_object) {
+                if let Some(text) = delta_obj.get("text").and_then(Value::as_str) {
+                    target.push_str(text);
+                    return;
+                }
+            }
+            if let Some(text) = value.get("text").and_then(Value::as_str) {
+                target.push_str(text);
+                return;
+            }
+            if let Some(content) = value.get("content").and_then(Value::as_array) {
+                for item in content {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        target.push_str(text);
                     }
-                    "2" => {
-                        if let Ok(data_array) = serde_json::from_str::<Vec<serde_json::Value>>(json_data) {
-                            for item in data_array {
-                                if let Some(obj) = item.as_object() {
-                                    if let (Some(type_val), Some(content)) = (obj.get("type"), obj.get("content")) {
-                                        if type_val.as_str() == Some("image-gen") {
-                                            if let Ok(url) = serde_json::from_str::<String>(content.as_str().unwrap_or("")) {
-                                                image_url = Some(url);
-                                            }
+                }
+            }
+        };
+        for line in response.lines() {
+            let trimmed = line.trim();
+            if let Some(data) = trimmed.strip_prefix("data: ") {
+                if data == "[DONE]" {
+                    break;
+                }
+                let parsed: Result<Value, serde_json::Error> = serde_json::from_str(data);
+                if let Ok(value) = parsed {
+                    let type_str = value.get("type").and_then(Value::as_str);
+                    if type_str == Some("image-gen") {
+                        image_url = value
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                value
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_string())
+                            })
+                            .or_else(|| {
+                                value
+                                    .get("delta")
+                                    .and_then(Value::as_object)
+                                    .and_then(|obj| {
+                                        obj.get("url")
+                                            .and_then(Value::as_str)
+                                            .map(|s| s.to_string())
+                                    })
+                            });
+                        if let Some(url_val) = image_url.as_ref() {
+                            if url_val.starts_with("data:image") {
+                                if let Some(pos) = url_val.find("base64,") {
+                                    inline_base64 = Some(url_val[(pos + 7)..].to_string());
+                                }
+                            }
+                        }
+                    } else if type_str == Some("tool-output-available")
+                        || type_str == Some("tool-output-partially-available")
+                    {
+                        if let Some(output_val) = value.get("output") {
+                            if let Some(output_obj) = output_val.as_object() {
+                                if let Some(url_val) = output_obj.get("url").and_then(Value::as_str)
+                                {
+                                    image_url = Some(url_val.to_string());
+                                } else if let Some(entries) =
+                                    output_obj.get("output").and_then(Value::as_array)
+                                {
+                                    for entry in entries {
+                                        if let Some(url_val) =
+                                            entry.get("url").and_then(Value::as_str)
+                                        {
+                                            image_url = Some(url_val.to_string());
                                         }
+                                    }
+                                }
+                            } else if let Some(output_arr) = output_val.as_array() {
+                                for entry in output_arr {
+                                    if let Some(url_val) = entry.get("url").and_then(Value::as_str)
+                                    {
+                                        image_url = Some(url_val.to_string());
                                     }
                                 }
                             }
                         }
+                        if let Some(url_val) = image_url.as_ref() {
+                            if url_val.starts_with("data:image") {
+                                if let Some(pos) = url_val.find("base64,") {
+                                    inline_base64 = Some(url_val[(pos + 7)..].to_string());
+                                }
+                            }
+                        }
+                    } else {
+                        push_text(&value, &mut text_result);
                     }
-                    _ => {}
                 }
             }
         }
-
         if text_result.is_empty() && image_url.is_none() {
             return Err("No valid content found in response".to_string());
         }
-
-        Ok((text_result.trim().to_string(), image_url))
+        Ok((text_result.trim().to_string(), image_url, inline_base64))
     }
 
     /**
@@ -186,18 +299,16 @@ impl Client {
     # Returns
     * `Result<String, Box<dyn std::error::Error>>` - Base64 encoded image data or an error.
     */
-    pub async fn download_image(&self, url: &str, save_path: Option<&Path>) -> Result<String, Box<dyn std::error::Error>> {
-        let response = self.client
-            .get(url)
-            .send()
-            .await?;
-
+    pub async fn download_image(
+        &self,
+        url: &str,
+        save_path: Option<&Path>,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let response = self.client.get(url).send().await?;
         if !response.status().is_success() {
             return Err(format!("Failed to download image: {}", response.status()).into());
         }
-
         let bytes = response.bytes().await?;
-
         if let Some(path) = save_path {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -205,7 +316,6 @@ impl Client {
             let mut file = fs::File::create(path)?;
             file.write_all(&bytes)?;
         }
-
         let base64_data = general_purpose::STANDARD.encode(&bytes);
         Ok(base64_data)
     }
@@ -231,7 +341,7 @@ impl Client {
     * `self` - &mut Self: The client instance.
     * `model` - &str: The model to use for the request.
     * `new_message` - Option<Message>: Optional new message to append before sending.
-    * `config` - &Config: The configuration for the request.
+    * `config` - Option<Config>: Optional configuration for the request.
 
     # Returns
     * `Result<Message, reqwest::Error>` - The assistant's response message or an error.
@@ -240,43 +350,42 @@ impl Client {
         &mut self,
         model: &str,
         new_message: Option<Message>,
-        config: &Config,
+        config: Option<Config>,
     ) -> Result<Message, reqwest::Error> {
+        let _ = self.refresh_session().await;
         if let Some(msg) = new_message {
             self.messages.push(msg);
         }
-
         if self.messages.is_empty() {
-            return Ok(Message::new(Type::Assistant, "Error: No messages to send".to_string()));
+            return Ok(Message::new(
+                Type::Assistant,
+                "Error: No messages to send".to_string(),
+            ));
         }
-        let reasoning_effort = match config.reasoning_effort {
-            ReasoningEffort::Low => "low",
-            ReasoningEffort::Medium => "medium",
-            ReasoningEffort::High => "high",
-        };
-
+        let resolved_config = config.unwrap_or_else(Config::new);
         let thread_id = match &self.thread_id {
             Some(id) => id.clone(),
             None => Uuid::new_v4().to_string(),
         };
-
-        let messages_json: Vec<serde_json::Value> = self.messages.iter().map(|msg| {
-            let role = match msg.role {
-                Type::Assistant => "assistant",
-                Type::User => "user",
-            };
-
-            serde_json::json!({
-                "id": &msg.id,
-                "parts": [{
-                    "type": "text",
-                    "text": &msg.content
-                }],
-                "role": role,
-                "attachments": []
+        let messages_json: Vec<serde_json::Value> = self
+            .messages
+            .iter()
+            .map(|msg| {
+                let role = match msg.role {
+                    Type::Assistant => "assistant",
+                    Type::User => "user",
+                };
+                serde_json::json!({
+                    "id": &msg.id,
+                    "parts": [{
+                        "type": "text",
+                        "text": &msg.content
+                    }],
+                    "role": role,
+                    "attachments": []
+                })
             })
-        }).collect();
-
+            .collect();
         let body = serde_json::json!({
             "messages": messages_json,
             "threadMetadata": {
@@ -286,8 +395,8 @@ impl Client {
             "model": model,
             "convexSessionId": self.convex_session_id,
             "modelParams": {
-                "reasoningEffort": reasoning_effort,
-                "includeSearch": config.include_search
+                "reasoningEffort": resolved_config.reasoning_effort.as_str(),
+                "includeSearch": resolved_config.include_search
             },
             "preferences": {
                 "name": "",
@@ -296,45 +405,35 @@ impl Client {
                 "additionalInfo": ""
             },
             "userInfo": {
-                "timezone": "America/New_York"
+                "timezone": "America/New_York",
+                "locale": "en-US"
             }
         });
-
-        let response = self.client
+        let response = self
+            .client
             .post("https://t3.chat/api/chat")
-            .header("Cookie", &self.cookies)
             .header("Content-Type", "application/json")
             .header("Referer", format!("https://t3.chat/chat/{}", thread_id))
+            .header("Cookie", &self.cookies)
+            .header("Origin", "https://t3.chat")
+            .header("Accept", "*/*")
             .json(&body)
             .send()
             .await?;
-
-        if !response.status().is_success() {
-            println!("Failed to send message: {}", response.status());
-        }
-
-        let bytes = response.bytes().await?;
-        let content = String::from_utf8_lossy(&bytes).to_string();
-
-        let (parsed_text, image_url) = match self.parse_response(&content).await {
-            Ok((text, url)) => (text, url),
-            Err(_) => {
-                (String::from("Failed to parse response"), None)
-            }
+        let content = response.text().await.unwrap_or_default();
+        let (parsed_text, image_url, inline_base64) = match self.parse_response(&content).await {
+            Ok((text, url, base64_data)) => (text, url, base64_data),
+            Err(_) => (String::from("Failed to parse response"), None, None),
         };
-
         if self.thread_id.is_none() {
             self.thread_id = Some(thread_id);
         }
-
         let assistant_message = if let Some(url) = image_url {
-            Message::new_image(Type::Assistant, url, None)
+            Message::new_image(Type::Assistant, url, inline_base64.clone())
         } else {
             Message::new(Type::Assistant, parsed_text)
         };
-
         self.messages.push(assistant_message.clone());
-
         Ok(assistant_message)
     }
 
@@ -345,7 +444,7 @@ impl Client {
     * `self` - &mut Self: The client instance.
     * `model` - &str: The model to use for the request.
     * `new_message` - Option<Message>: Optional new message to append before sending.
-    * `config` - &Config: The configuration for the request.
+    * `config` - Option<Config>: Optional configuration for the request.
     * `save_path` - Option<&Path>: Optional path to save generated images.
 
     # Returns
@@ -355,26 +454,19 @@ impl Client {
         &mut self,
         model: &str,
         new_message: Option<Message>,
-        config: &Config,
+        config: Option<Config>,
         save_path: Option<&Path>,
     ) -> Result<Message, Box<dyn std::error::Error>> {
         let mut response = self.send(model, new_message, config).await?;
-
-        if let ContentType::Image { url, base64: _ } = &response.content_type {
-            let base64_data = self.download_image(url, save_path).await?;
-
-            response.content_type = ContentType::Image {
-                url: url.clone(),
-                base64: Some(base64_data),
-            };
-        }
-
-        if let Some(last_msg) = self.messages.last_mut() {
-            if matches!(&response.content_type, ContentType::Image { .. }) {
-                last_msg.content_type = response.content_type.clone();
+        if matches!(&response.content_type, ContentType::Image) && response.base64_data.is_none() {
+            if let Some(url) = response.image_url.clone() {
+                let base64_data = self.download_image(&url, save_path).await?;
+                response.base64_data = Some(base64_data.clone());
+                if let Some(last_msg) = self.messages.last_mut() {
+                    last_msg.base64_data = Some(base64_data);
+                }
             }
         }
-
         Ok(response)
     }
 }

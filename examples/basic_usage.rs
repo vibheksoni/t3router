@@ -1,5 +1,5 @@
-use std::path::Path;
 use dotenv::dotenv;
+use std::path::Path;
 
 use t3router::t3::client::Client;
 use t3router::t3::config::Config;
@@ -22,7 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
     let cookies = std::env::var("COOKIES").expect("COOKIES not set");
-    let convex_session_id = format!("\"{}\"", std::env::var("CONVEX_SESSION_ID").expect("CONVEX_SESSION_ID not set"));
+    let convex_session_id = format!(
+        "\"{}\"",
+        std::env::var("CONVEX_SESSION_ID").expect("CONVEX_SESSION_ID not set")
+    );
 
     println!("=== Sending a Message ===\n");
     let mut client = Client::new(cookies, convex_session_id);
@@ -52,26 +55,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // Returns:
     // - `Message`: Response containing either image or text content.
-    let image_response = client.send_with_image_download(
-        "gpt-image-1",
-        Some(Message::new(Type::User, "Create a simple drawing of a happy robot".to_string())),
-        &config,
-        Some(save_path)
-    ).await?;
+    let image_response = client
+        .send_with_image_download(
+            "gpt-image-1",
+            Some(Message::new(
+                Type::User,
+                "Create a simple drawing of a happy robot".to_string(),
+            )),
+            Some(config),
+            Some(save_path),
+        )
+        .await?;
 
     println!("User: Create a simple drawing of a happy robot");
-    match &image_response.content_type {
-        ContentType::Image { url, base64 } => {
-            println!("Assistant: Generated image at URL: {}", url);
+    match image_response.content_type {
+        ContentType::Image => {
+            if let Some(url) = image_response.image_url {
+                println!("Assistant: Generated image at URL: {}", url);
+            }
             if save_path.exists() {
                 println!("Image saved to: {:?}", save_path);
             }
-            if let Some(b64) = base64 {
+            if let Some(b64) = image_response.base64_data {
                 println!("Base64 data available ({} characters)", b64.len());
             }
         }
-        ContentType::Text(text) => {
-            println!("Assistant: {}", text);
+        ContentType::Text => {
+            println!("Assistant: {}", image_response.content);
         }
     }
 

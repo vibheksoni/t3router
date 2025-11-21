@@ -22,7 +22,7 @@ pub struct ModelInfo {
 pub struct ModelsClient {
     client: reqwest::Client,
     cookies: String,
-    convex_session_id: String,
+    _convex_session_id: String,
 }
 
 impl ModelsClient {
@@ -38,65 +38,62 @@ impl ModelsClient {
         Self {
             client: reqwest::Client::new(),
             cookies,
-            convex_session_id,
+            _convex_session_id: convex_session_id,
         }
     }
 
-    /// Fetch the webpack chunk URL from t3.chat homepage.
+    ///
+    /// Fetch all chunk URLs from the t3.chat homepage.
+    ///
+    /// # Arguments
+    /// * `self`: `&Self` - The models client instance.
     ///
     /// # Returns
-    /// * Result<String, Box<dyn std::error::Error>> - The webpack chunk URL or error.
-    async fn get_webpack_url(&self) -> Result<String, Box<dyn std::error::Error>> {
-        let response = self.client
+    /// * `Result<Vec<String>, Box<dyn std::error::Error>>` - Chunk URLs or an error.
+    async fn get_chunk_urls_from_homepage(
+        &self,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let response = self
+            .client
             .get("https://t3.chat/")
             .header("Cookie", &self.cookies)
             .send()
             .await?;
         let html = response.text().await?;
-        let webpack_regex = Regex::new(r#"<link[^>]+rel="preload"[^>]+href="(/_next/static/chunks/webpack-[^"]+\.js[^"]*)"#)?;
-        if let Some(captures) = webpack_regex.captures(&html) {
-            let webpack_path = captures.get(1).unwrap().as_str();
-            Ok(format!("https://t3.chat{}", webpack_path))
-        } else {
-            Err("Could not find webpack URL in homepage".into())
-        }
-    }
-
-    /// Get chunk URLs that contain model definitions.
-    ///
-    /// # Arguments
-    /// * `webpack_url` - &str: The webpack chunk URL.
-    ///
-    /// # Returns
-    /// * Result<Vec<String>, Box<dyn std::error::Error>> - List of chunk URLs or error.
-    async fn get_model_chunk_urls(&self, webpack_url: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-        let response = self.client
-            .get(webpack_url)
-            .header("Cookie", &self.cookies)
-            .send()
-            .await?;
-        let webpack_content = response.text().await?;
-        let chunk_regex = Regex::new(r#"(\d+)\s*===\s*e\s*\?\s*"(static/chunks/[^"]+\.js)""#)?;
+        let script_regex =
+            Regex::new(r#"<script[^>]+src="(/_next/static/chunks/[a-f0-9]+\.js[^"]*)"#)?;
         let mut chunk_urls = Vec::new();
-        for capture in chunk_regex.captures_iter(&webpack_content) {
-            //let chunk_id = capture.get(1).unwrap().as_str();
-            let chunk_path = capture.get(2).unwrap().as_str();
-            chunk_urls.push(format!("https://t3.chat/_next/{}", chunk_path));
+        for capture in script_regex.captures_iter(&html) {
+            let chunk_path = capture.get(1).unwrap().as_str();
+            chunk_urls.push(format!("https://t3.chat{}", chunk_path));
+        }
+        if chunk_urls.is_empty() {
+            return Err("Could not find any chunk URLs in homepage".into());
         }
         Ok(chunk_urls)
     }
 
+    ///
     /// Parse model information from a JavaScript chunk.
     ///
     /// # Arguments
-    /// * `chunk_url` - &str: The chunk URL to parse.
+    /// * `chunk_url`: `&str` - The chunk URL to parse.
     ///
     /// # Returns
-    /// * Result<Vec<ModelInfo>, Box<dyn std::error::Error>> - List of ModelInfo or error.
-    async fn parse_models_from_chunk(&self, chunk_url: &str) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
-        let response = self.client
+    /// * `Result<Vec<ModelInfo>, Box<dyn std::error::Error>>` - List of models or an error.
+    async fn parse_models_from_chunk(
+        &self,
+        chunk_url: &str,
+    ) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
+        let response = self
+            .client
             .get(chunk_url)
             .header("Cookie", &self.cookies)
+            .header("Referer", "https://t3.chat/")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
             .send()
             .await?;
         let js_content = response.text().await?;
@@ -109,10 +106,13 @@ impl ModelsClient {
                 model_ids.push(capture.get(1).unwrap().as_str().to_string());
             }
         }
+        if model_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut models = Vec::new();
         for model_id in &model_ids {
             let pattern = format!(
-                r#""{}":\s*\{{[^\{{]*?id:\s*"([^"]+)"[^\{{]*?name:\s*"([^"]+)"[^\{{]*?provider:\s*"([^"]+)"[^\{{]*?developer:\s*"([^"]+)"[^\{{]*?shortDescription:\s*"([^"]+)"[^\{{]*?fullDescription:\s*"([^"]+)"[^\{{]*?requiresPro:\s*(!?\d)[^\{{]*?premium:\s*(!?\d)"#,
+                r#"(?s)"{}":\s*\{{.*?id:\s*"([^"]+)"(?s).*?name:\s*"([^"]+)"(?s).*?provider:\s*"([^"]+)"(?s).*?developer:\s*"([^"]+)"(?s).*?shortDescription:\s*"([^"]*)"(?:.*?fullDescription:\s*"([^"]*)")?"#,
                 regex::escape(model_id)
             );
             if let Ok(model_regex) = Regex::new(&pattern) {
@@ -123,40 +123,26 @@ impl ModelsClient {
                         provider: capture.get(3).unwrap().as_str().to_string(),
                         developer: capture.get(4).unwrap().as_str().to_string(),
                         short_description: capture.get(5).unwrap().as_str().to_string(),
-                        full_description: capture.get(6).unwrap().as_str().to_string(),
-                        requires_pro: capture.get(7).unwrap().as_str() != "!1",
-                        premium: capture.get(8).unwrap().as_str() != "!1",
+                        full_description: capture
+                            .get(6)
+                            .map_or(String::new(), |m| m.as_str().to_string()),
+                        requires_pro: false,
+                        premium: false,
                     };
                     models.push(model);
+                    continue;
                 }
             }
-        }
-        let general_pattern = r#""([^"]+)":\s*\{[^\{]*?id:\s*"[^"]+"[^\{]*?name:\s*"([^"]+)"[^\{]*?provider:\s*"([^"]+)"[^\{]*?developer:\s*"([^"]+)"[^\{]*?shortDescription:\s*"([^"]+)"#;
-        if let Ok(general_regex) = Regex::new(general_pattern) {
-            for capture in general_regex.captures_iter(&js_content) {
-                let id = capture.get(1).unwrap().as_str().to_string();
-                if !models.iter().any(|m| m.id == id) {
-                    let pattern = format!(
-                        r#""{}":\s*\{{[^\{{]*?id:\s*"([^"]+)"[^\{{]*?name:\s*"([^"]+)"[^\{{]*?provider:\s*"([^"]+)"[^\{{]*?developer:\s*"([^"]+)"[^\{{]*?shortDescription:\s*"([^"]+)"[^\{{]*?fullDescription:\s*"([^"]+)"[^\{{]*?requiresPro:\s*(!?\d)[^\{{]*?premium:\s*(!?\d)"#,
-                        regex::escape(&id)
-                    );
-                    if let Ok(model_regex) = Regex::new(&pattern) {
-                        if let Some(cap) = model_regex.captures(&js_content) {
-                            let model = ModelInfo {
-                                id: cap.get(1).unwrap().as_str().to_string(),
-                                name: cap.get(2).unwrap().as_str().to_string(),
-                                provider: cap.get(3).unwrap().as_str().to_string(),
-                                developer: cap.get(4).unwrap().as_str().to_string(),
-                                short_description: cap.get(5).unwrap().as_str().to_string(),
-                                full_description: cap.get(6).unwrap().as_str().to_string(),
-                                requires_pro: cap.get(7).unwrap().as_str() != "!1",
-                                premium: cap.get(8).unwrap().as_str() != "!1",
-                            };
-                            models.push(model);
-                        }
-                    }
-                }
-            }
+            models.push(ModelInfo {
+                id: model_id.clone(),
+                name: model_id.to_uppercase(),
+                provider: "Unknown".to_string(),
+                developer: "Unknown".to_string(),
+                short_description: format!("{} model", model_id),
+                full_description: String::new(),
+                requires_pro: false,
+                premium: false,
+            });
         }
         Ok(models)
     }
@@ -168,16 +154,17 @@ impl ModelsClient {
     pub async fn get_model_statuses(&self) -> Result<Vec<ModelStatus>, Box<dyn std::error::Error>> {
         match self.fetch_models_dynamically().await {
             Ok(models) => {
-                let statuses = models.into_iter().map(|m| ModelStatus {
-                    name: m.id,
-                    indicator: "operational".to_string(),
-                    description: m.short_description,
-                }).collect();
+                let statuses = models
+                    .into_iter()
+                    .map(|m| ModelStatus {
+                        name: m.id,
+                        indicator: "operational".to_string(),
+                        description: m.short_description,
+                    })
+                    .collect();
                 Ok(statuses)
             }
-            Err(_) => {
-                self.get_fallback_models()
-            }
+            Err(_) => self.get_fallback_models(),
         }
     }
 
@@ -186,14 +173,19 @@ impl ModelsClient {
     /// # Returns
     /// * Result<Vec<ModelInfo>, Box<dyn std::error::Error>> - List of ModelInfo or error.
     async fn fetch_models_dynamically(&self) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
-        let webpack_url = self.get_webpack_url().await?;
-        let chunk_urls = self.get_model_chunk_urls(&webpack_url).await?;
+        let known_chunks = vec!["https://t3.chat/_next/static/chunks/3af0bf4d01fe7216.js"];
+        for chunk_url in known_chunks {
+            if let Ok(models) = self.parse_models_from_chunk(chunk_url).await {
+                if models.len() > 10 {
+                    return Ok(models);
+                }
+            }
+        }
+        let chunk_urls = self.get_chunk_urls_from_homepage().await?;
         for chunk_url in chunk_urls {
-            match self.parse_models_from_chunk(&chunk_url).await {
-                Ok(models) if !models.is_empty() => return Ok(models),
-                Ok(_) => continue,
-                Err(_) => {
-                    continue;
+            if let Ok(models) = self.parse_models_from_chunk(&chunk_url).await {
+                if models.len() > 10 {
+                    return Ok(models);
                 }
             }
         }

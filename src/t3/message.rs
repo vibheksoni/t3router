@@ -10,8 +10,8 @@ pub enum Type {
 /// Represents the content type of a message.
 #[derive(Clone, Debug)]
 pub enum ContentType {
-    Text(String),
-    Image { url: String, base64: Option<String> },
+    Text,
+    Image,
 }
 
 /// Represents a message with a role, content, and unique ID.
@@ -21,65 +21,70 @@ pub struct Message {
     pub role: Type,
     pub content: String,
     pub content_type: ContentType,
+    pub image_url: Option<String>,
+    pub base64_data: Option<String>,
 }
 
 impl Message {
+    ///
     /// Creates a new text `Message` with a randomly generated ID.
     ///
     /// # Arguments
-    ///
-    /// * `role` - Type - The role of the message sender (Assistant or User).
-    /// * `content` - String - The content of the message.
+    /// * `role`: `Type` - The role of the message sender.
+    /// * `content`: `String` - The text content of the message.
     ///
     /// # Returns
-    ///
-    /// A new instance of `Message` with a unique ID.
+    /// * `Message` - A new text message instance.
     pub fn new(role: Type, content: String) -> Self {
-        Self { 
+        Self {
             id: Uuid::new_v4().to_string(),
-            role, 
-            content: content.clone(),
-            content_type: ContentType::Text(content),
+            role,
+            content,
+            content_type: ContentType::Text,
+            image_url: None,
+            base64_data: None,
         }
     }
-    
+
+    ///
     /// Creates a new image `Message` with a randomly generated ID.
     ///
     /// # Arguments
-    ///
-    /// * `role` - Type - The role of the message sender (Assistant or User).
-    /// * `url` - String - The URL of the image.
-    /// * `base64` - Option<String> - Optional base64 encoded image data.
+    /// * `role`: `Type` - The role of the message sender.
+    /// * `url`: `String` - The URL of the generated image.
+    /// * `base64`: `Option<String>` - Optional base64-encoded image data.
     ///
     /// # Returns
-    ///
-    /// A new instance of image `Message` with a unique ID.
+    /// * `Message` - A new image message instance.
     pub fn new_image(role: Type, url: String, base64: Option<String>) -> Self {
-        Self { 
+        Self {
             id: Uuid::new_v4().to_string(),
-            role, 
+            role,
             content: url.clone(),
-            content_type: ContentType::Image { url, base64 },
+            content_type: ContentType::Image,
+            image_url: Some(url),
+            base64_data: base64,
         }
     }
-    
+
+    ///
     /// Creates a new `Message` with a specific ID.
     ///
     /// # Arguments
-    ///
-    /// * `id` - String - The specific ID for the message.
-    /// * `role` - Type - The role of the message sender (Assistant or User).
-    /// * `content` - String - The content of the message.
+    /// * `id`: `String` - The specific ID for the message.
+    /// * `role`: `Type` - The role of the message sender.
+    /// * `content`: `String` - The text content of the message.
     ///
     /// # Returns
-    ///
-    /// A new instance of `Message` with the specified ID.
+    /// * `Message` - A new message instance with the provided ID.
     pub fn with_id(id: String, role: Type, content: String) -> Self {
-        Self { 
-            id, 
-            role, 
-            content: content.clone(),
-            content_type: ContentType::Text(content),
+        Self {
+            id,
+            role,
+            content,
+            content_type: ContentType::Text,
+            image_url: None,
+            base64_data: None,
         }
     }
 }
