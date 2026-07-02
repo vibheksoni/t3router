@@ -271,6 +271,21 @@ t3router/
 
 This project is not intended for abusing t3.chat or any related services; it is simply a technical demonstration and a cool tool for experimentation. We do not promote or support any misuse of this library. The author(s) take no responsibility for any actions taken against your account. In principle, this should not happen, as the library only functions with paid subscription accounts; however, t3.chat may introduce countermeasures in the future. Use at your own risk.
 
+## pi-t3chat — Pi Coding Agent Extension
+
+Built on top of t3router, [**pi-t3chat**](https://github.com/vibheksoni/pi-t3chat) is a [Pi coding agent](https://github.com/earendil-works/pi-coding-agent) extension that brings all 50+ t3.chat models into Pi's OpenAI-compatible interface — with full tool calling support, MCP wrapper tools, and token usage reporting.
+
+```bash
+pi install git:github.com/vibheksoni/pi-t3chat
+```
+
+**Features beyond t3router:**
+- **Tool calling** — OpenAI-compatible function calling with text-based protocol fallback
+- **MCP wrapper tools** — `list_mcps`, `list_mcp_tools`, `call_mcp` discovery for `mcp__`-prefixed tools
+- **SSE streaming** — Server-Sent Events with reasoning content support
+- **Token usage reporting** — Estimated `prompt_tokens`, `completion_tokens`, `total_tokens` with cache/reasoning details
+- **Full Pi SDK compatibility** — `compat` flags, `developer` role handling, `stream_options`, `max_tokens` field
+
 ## Contributing
 
 If you find a bug or want to add something:
