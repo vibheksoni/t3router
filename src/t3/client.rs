@@ -3,18 +3,31 @@ use std::io::Write;
 use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose};
-use reqwest;
+use wreq_util::Emulation;
+use wreq;
 use serde_json::{self, Value};
 use uuid::Uuid;
 
 use super::config::Config;
 use super::message::{ContentType, Message, Type};
+use super::usage::UsageClient;
+
+#[derive(Debug, Clone)]
+pub struct ChatResponse {
+    pub message: Message,
+    pub thread_id: String,
+    pub model: String,
+    pub credits_before: Option<f64>,
+    pub credits_after: Option<f64>,
+    pub credits_deducted: Option<f64>,
+    pub finish_reason: Option<String>,
+}
 
 pub struct Client {
     cookies: String,
     convex_session_id: String,
     thread_id: Option<String>,
-    client: reqwest::Client,
+    client: wreq::Client,
     messages: Vec<Message>,
 }
 
@@ -34,23 +47,9 @@ impl Client {
             cookies,
             convex_session_id,
             thread_id: None,
-            client: reqwest::Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
-                .default_headers({
-                    let mut headers = reqwest::header::HeaderMap::new();
-                    headers.insert("accept-language", "en-US,en;q=0.9".parse().unwrap());
-                    headers.insert("cache-control", "no-cache".parse().unwrap());
-                    headers.insert("origin", "https://t3.chat".parse().unwrap());
-                    headers.insert("pragma", "no-cache".parse().unwrap());
-                    headers.insert("priority", "u=1, i".parse().unwrap());
-                    headers.insert("sec-ch-ua", "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"".parse().unwrap());
-                    headers.insert("sec-ch-ua-mobile", "?0".parse().unwrap());
-                    headers.insert("sec-ch-ua-platform", "\"Windows\"".parse().unwrap());
-                    headers.insert("sec-fetch-dest", "empty".parse().unwrap());
-                    headers.insert("sec-fetch-mode", "cors".parse().unwrap());
-                    headers.insert("sec-fetch-site", "same-origin".parse().unwrap());
-                    headers
-                })
+            client: wreq::Client::builder()
+                .emulation(Emulation::Chrome136)
+                .cookie_store(true)
                 .build()
                 .unwrap(),
             messages: Vec::new(),
@@ -64,8 +63,8 @@ impl Client {
     /// * `self`: `&mut Self` - The client instance.
     ///
     /// # Returns
-    /// * `Result<bool, reqwest::Error>` - True if refresh succeeded.
-    pub async fn refresh_session(&mut self) -> Result<bool, reqwest::Error> {
+    /// * `Result<bool, wreq::Error>` - True if refresh succeeded.
+    pub async fn refresh_session(&mut self) -> Result<bool, wreq::Error> {
         let url = "https://t3.chat/api/trpc/auth.getActiveSessions?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22includeLocation%22%3Afalse%7D%7D%7D";
         let response = self
             .client
@@ -107,9 +106,9 @@ impl Client {
     * `self` - &Self: The client instance.
 
     # Returns
-    * `Result<bool, reqwest::Error>` - True if the request was successful, otherwise an error.
+    * `Result<bool, wreq::Error>` - True if the request was successful, otherwise an error.
     */
-    pub async fn init(&self) -> Result<bool, reqwest::Error> {
+    pub async fn init(&self) -> Result<bool, wreq::Error> {
         let res = self
             .client
             .get("https://t3.chat/")
@@ -231,7 +230,7 @@ impl Client {
                                 }
                             }
                         }
-                    } else {
+                    } else if type_str == Some("text-delta") || type_str == Some("text") {
                         push_text(&value, &mut text_result);
                     }
                 }
@@ -344,15 +343,14 @@ impl Client {
     * `config` - Option<Config>: Optional configuration for the request.
 
     # Returns
-    * `Result<Message, reqwest::Error>` - The assistant's response message or an error.
+    * `Result<Message, wreq::Error>` - The assistant's response message or an error.
     */
     pub async fn send(
         &mut self,
         model: &str,
         new_message: Option<Message>,
         config: Option<Config>,
-    ) -> Result<Message, reqwest::Error> {
-        let _ = self.refresh_session().await;
+    ) -> Result<Message, wreq::Error> {
         if let Some(msg) = new_message {
             self.messages.push(msg);
         }
@@ -389,14 +387,17 @@ impl Client {
         let body = serde_json::json!({
             "messages": messages_json,
             "threadMetadata": {
-                "id": thread_id.clone()
+                "id": thread_id.clone(),
+                "title": ""
             },
+            "clientAuth": { "isSignedIn": true },
             "responseMessageId": Uuid::new_v4().to_string(),
             "model": model,
             "convexSessionId": self.convex_session_id,
             "modelParams": {
                 "reasoningEffort": resolved_config.reasoning_effort.as_str(),
-                "includeSearch": resolved_config.include_search
+                "includeSearch": resolved_config.include_search,
+                "searchLimit": 1
             },
             "preferences": {
                 "name": "",
@@ -404,10 +405,24 @@ impl Client {
                 "selectedTraits": [],
                 "additionalInfo": ""
             },
+            "userConfiguration": {
+                "codeFont": "berkeley",
+                "currentModelParameters": {
+                    "includeSearch": resolved_config.include_search,
+                    "reasoningEffort": resolved_config.reasoning_effort.as_str()
+                },
+                "currentlySelectedModel": model,
+                "favoriteModels": [],
+                "hasMigrated": true,
+                "mainFont": "proxima",
+                "streamerMode": false,
+                "theme": "dark"
+            },
             "userInfo": {
                 "timezone": "America/New_York",
                 "locale": "en-US"
-            }
+            },
+            "isEphemeral": false
         });
         let response = self
             .client
@@ -468,5 +483,50 @@ impl Client {
             }
         }
         Ok(response)
+    }
+
+    /// Send a message and track credit deduction by comparing balance before and after the request.
+    ///
+    /// # Arguments
+    /// * `self` - &mut Self: The client instance.
+    /// * `model` - &str: The model to use for the request.
+    /// * `new_message` - Option<Message>: Optional new message to append before sending.
+    /// * `config` - Option<Config>: Optional configuration for the request.
+    ///
+    /// # Returns
+    /// * `Result<ChatResponse, Box<dyn std::error::Error>>` - Response with message and credit tracking.
+    pub async fn send_with_credits(
+        &mut self,
+        model: &str,
+        new_message: Option<Message>,
+        config: Option<Config>,
+    ) -> Result<ChatResponse, Box<dyn std::error::Error>> {
+        let usage_client = UsageClient::new(self.cookies.clone());
+        let credits_before = usage_client.get_balance().await.ok();
+        let thread_id = self
+            .thread_id
+            .clone()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let message = self.send(model, new_message, config).await?;
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        let credits_after = usage_client.get_balance().await.ok();
+        let credits_deducted = match (credits_before, credits_after) {
+            (Some(before), Some(after)) => Some(before - after),
+            _ => None,
+        };
+        let finish_reason = self.extract_finish_reason();
+        Ok(ChatResponse {
+            message,
+            thread_id,
+            model: model.to_string(),
+            credits_before,
+            credits_after,
+            credits_deducted,
+            finish_reason,
+        })
+    }
+
+    fn extract_finish_reason(&self) -> Option<String> {
+ None
     }
 }

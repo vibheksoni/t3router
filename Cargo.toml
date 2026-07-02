@@ -14,8 +14,9 @@ base64 = "0.22"
 chrono = "0.4"
 dotenv = "0.15.0"
 regex = "1.10"
-reqwest = { version = "0.12.22", features = ["json"] }
+wreq = { version = "6.0.0-rc.29", features = ["json", "cookies", "tokio-rt"] }
+wreq-util = "3.0.0-rc.13"
 serde_json = "1.0.142"
-tokio = { version = "1.47.1", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 uuid = { version = "1.17.0", features = ["v4"] }
 urlencoding = "2.1"
