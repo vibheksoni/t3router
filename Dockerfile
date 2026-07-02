@@ -1,5 +1,9 @@
 FROM rust:1.88-bookworm AS builder
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 COPY . .
 
