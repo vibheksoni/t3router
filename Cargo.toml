@@ -1,6 +1,6 @@
 [package]
 name = "t3router"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Vibhek Soni"]
 description = "A Rust client library for t3.chat - access 50+ AI models from your terminal"
