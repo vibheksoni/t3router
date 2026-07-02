@@ -1,0 +1,18 @@
+FROM rust:1.88-bookworm AS builder
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build --release --example basic_usage
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/examples/basic_usage /usr/local/bin/t3router
+
+LABEL org.opencontainers.image.source="https://github.com/vibheksoni/t3router"
+LABEL org.opencontainers.image.description="Rust client library for t3.chat — access 50+ AI models from your terminal"
+LABEL org.opencontainers.image.license="MIT"
+
+ENTRYPOINT ["t3router"]
