@@ -11,12 +11,19 @@ categories = ["api-bindings", "command-line-utilities"]
 
 [dependencies]
 base64 = "0.22"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
 dotenv = "0.15.0"
 regex = "1.10"
-wreq = { version = "6.0.0-rc.29", features = ["json", "cookies", "tokio-rt"] }
+serde = { version = "1.0", features = ["derive"] }
+wreq = { version = "6.0.0-rc.29", features = ["json", "cookies", "tokio-rt", "stream"] }
 wreq-util = "3.0.0-rc.13"
 serde_json = "1.0.142"
+futures-util = "0.3"
 tokio = { version = "1.52", features = ["full"] }
 uuid = { version = "1.17.0", features = ["v4"] }
 urlencoding = "2.1"
+
+[[bin]]
+name = "t3chat"
+path = "src/bin/t3chat.rs"

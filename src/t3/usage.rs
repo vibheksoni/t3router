@@ -190,6 +190,10 @@ impl UsageClient {
         }
     }
 
+    pub fn set_cookies(&mut self, cookies: String) {
+        self.cookies = cookies;
+    }
+
     /// Fetch customer data (balance, usage, subscription) from t3.chat tRPC API.
     ///
     /// # Arguments

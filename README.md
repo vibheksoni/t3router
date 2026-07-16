@@ -65,12 +65,40 @@ dotenv = "0.15"
 
 ### Setting Up
 
-Create a `.env` file in your project:
+Copy `.env.example` to `.env` and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
 
 ```env
 COOKIES="your_full_cookie_string_here"
 CONVEX_SESSION_ID="your_session_id_here"
+T3_MODEL="kimi-k2.5"
+T3_SYSTEM_PROMPT="optional system prompt for the session"
+T3_TIMEZONE="America/New_York"
+T3_LOCALE="en-US"
 ```
+
+### Terminal Chat
+
+Interactive chat with streaming output, session auto-save, and credit tracking:
+
+```bash
+cargo run --bin t3chat
+```
+
+Or via the example target:
+
+```bash
+cargo run --example chat
+```
+
+**Chat commands:** `/help`, `/new`, `/resume`, `/save`, `/model <id>`, `/credits`, `/quit`
+
+Sessions are auto-saved to `~/.t3router/session.json` after each message and restored on startup.
+
+**Streaming:** responses stream token-by-token. Library methods: `send_stream()` and `send_with_credits_stream()`.
 
 ## Examples
 
@@ -240,7 +268,7 @@ t3router/
         usage.rs        # Usage & billing via tRPC
         history.rs      # Conversation history parser
  examples/
-    basic_usage.rs      # Simple chat + credit tracking
+    chat.rs             # Interactive terminal chat (use `cargo run --bin t3chat`)
     multi_message.rs    # Multi-turn conversations
     image_generation.rs # Image generation with download
     list_models.rs      # All models + statuses + benchmarks
